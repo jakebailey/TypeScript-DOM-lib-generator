@@ -33,6 +33,8 @@ export const forceKeepAlive: Record<string, string[]> = {
     // https://github.com/mdn/browser-compat-data/issues/15345
     "onslotchange",
   ],
+  // WebTransportSendStream.getWriter() returns WebTransportWriter, but BCD has no entry for it
+  WebTransportWriter: [],
   XMLHttpRequestEventTarget: [
     // BCD unexpectedly is removing valid event data
     // https://github.com/mdn/browser-compat-data/issues/15345

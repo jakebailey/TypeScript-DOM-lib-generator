@@ -3115,6 +3115,30 @@ interface WebTransportCloseInfo {
     reason?: string;
 }
 
+interface WebTransportConnectionStats {
+    atSendCapacity?: boolean;
+    bytesAcknowledged?: number;
+    bytesLost?: number;
+    bytesReceived?: number;
+    bytesSent?: number;
+    bytesSentOverhead?: number;
+    datagrams: WebTransportDatagramStats;
+    estimatedSendRate?: number | null;
+    minRtt?: DOMHighResTimeStamp;
+    packetsLost?: number;
+    packetsReceived?: number;
+    packetsSent?: number;
+    rttVariation?: DOMHighResTimeStamp;
+    smoothedRtt?: DOMHighResTimeStamp;
+}
+
+interface WebTransportDatagramStats {
+    droppedIncoming?: number;
+    expiredIncoming?: number;
+    expiredOutgoing?: number;
+    lostOutgoing?: number;
+}
+
 interface WebTransportErrorOptions {
     source?: WebTransportErrorSource;
     streamErrorCode?: number | null;
@@ -3133,11 +3157,22 @@ interface WebTransportOptions {
     serverCertificateHashes?: WebTransportHash[];
 }
 
+interface WebTransportReceiveStreamStats {
+    bytesRead?: number;
+    bytesReceived?: number;
+}
+
 interface WebTransportSendOptions {
     sendOrder?: number;
 }
 
 interface WebTransportSendStreamOptions extends WebTransportSendOptions {
+}
+
+interface WebTransportSendStreamStats {
+    bytesAcknowledged?: number;
+    bytesSent?: number;
+    bytesWritten?: number;
 }
 
 interface WheelEventInit extends MouseEventInit {
@@ -6812,7 +6847,11 @@ interface CSSStyleProperties extends CSSStyleDeclarationBase {
      * [MDN Reference](https://developer.mozilla.org/docs/Web/CSS/Reference/Properties/background-size)
      */
     backgroundSize: string;
-    /** The baseline-shift CSS property repositions the dominant-baseline of a text element relative to the dominant-baseline of its parent text content element. The shifted element might be a sub- or superscript. If the property is present, the value overrides the element's baseline-shift attribute. */
+    /**
+     * The baseline-shift CSS property repositions the dominant-baseline of a text element relative to the dominant-baseline of its parent text content element. The shifted element might be a sub- or superscript. If the property is present, the value overrides the element's baseline-shift attribute.
+     *
+     * [MDN Reference](https://developer.mozilla.org/docs/Web/CSS/Reference/Properties/baseline-shift)
+     */
     baselineShift: string;
     /**
      * The baseline-source CSS property defines which baseline to use when inline-level boxes have multiple possible baselines, such as multi-line inline blocks or inline flex containers. The values allow for choosing between aligning to the box's first baseline, last baseline, or letting the browser decide automatically based on the box type.
@@ -27894,6 +27933,12 @@ interface PerformanceResourceTiming extends PerformanceEntry {
      */
     readonly decodedBodySize: number;
     /**
+     * The **`deliveryType`** read-only property is a string indicating how the resource was delivered — for example from the cache or from a navigational prefetch.
+     *
+     * [MDN Reference](https://developer.mozilla.org/docs/Web/API/PerformanceResourceTiming/deliveryType)
+     */
+    readonly deliveryType: string;
+    /**
      * The **`domainLookupEnd`** read-only property returns the timestamp immediately after the browser finishes the domain-name lookup for the resource.
      *
      * [MDN Reference](https://developer.mozilla.org/docs/Web/API/PerformanceResourceTiming/domainLookupEnd)
@@ -27917,6 +27962,18 @@ interface PerformanceResourceTiming extends PerformanceEntry {
      * [MDN Reference](https://developer.mozilla.org/docs/Web/API/PerformanceResourceTiming/fetchStart)
      */
     readonly fetchStart: DOMHighResTimeStamp;
+    /**
+     * The **`finalResponseHeadersStart`** read-only property returns a timestamp immediately after the browser receives the first byte of the final document response (for example, 200 OK) from the server.
+     *
+     * [MDN Reference](https://developer.mozilla.org/docs/Web/API/PerformanceResourceTiming/finalResponseHeadersStart)
+     */
+    readonly finalResponseHeadersStart: DOMHighResTimeStamp;
+    /**
+     * The **`firstInterimResponseStart`** read-only property returns a timestamp immediately after the browser receives the first byte of the interim 1xx response (for example, 100 Continue or 103 Early Hints) from the server.
+     *
+     * [MDN Reference](https://developer.mozilla.org/docs/Web/API/PerformanceResourceTiming/firstInterimResponseStart)
+     */
+    readonly firstInterimResponseStart: DOMHighResTimeStamp;
     /**
      * The **`initiatorType`** read-only property is a string representing web platform feature that initiated the resource load.
      *
@@ -40936,6 +40993,12 @@ interface WebTransport {
      */
     readonly closed: Promise<WebTransportCloseInfo>;
     /**
+     * The **`congestionControl`** read-only property of the WebTransport interface indicates the application's preference for either high throughput or low-latency when sending data.
+     *
+     * [MDN Reference](https://developer.mozilla.org/docs/Web/API/WebTransport/congestionControl)
+     */
+    readonly congestionControl: WebTransportCongestionControl;
+    /**
      * The **`datagrams`** read-only property of the WebTransport interface returns a WebTransportDatagramDuplexStream instance that can be used to send and receive datagrams — unreliable data transmission.
      *
      * [MDN Reference](https://developer.mozilla.org/docs/Web/API/WebTransport/datagrams)
@@ -40953,12 +41016,19 @@ interface WebTransport {
      * [MDN Reference](https://developer.mozilla.org/docs/Web/API/WebTransport/incomingUnidirectionalStreams)
      */
     readonly incomingUnidirectionalStreams: ReadableStream;
+    readonly protocol: string;
     /**
      * The **`ready`** read-only property of the WebTransport interface returns a promise that resolves when the transport is ready to use.
      *
      * [MDN Reference](https://developer.mozilla.org/docs/Web/API/WebTransport/ready)
      */
     readonly ready: Promise<void>;
+    /**
+     * The **`reliability`** read-only property of the WebTransport interface indicates whether the connection supports reliable transports only, or whether it also supports unreliable transports (such as UDP).
+     *
+     * [MDN Reference](https://developer.mozilla.org/docs/Web/API/WebTransport/reliability)
+     */
+    readonly reliability: WebTransportReliabilityMode;
     /**
      * The **`close()`** method of the WebTransport interface closes an ongoing WebTransport session.
      *
@@ -40977,6 +41047,12 @@ interface WebTransport {
      * [MDN Reference](https://developer.mozilla.org/docs/Web/API/WebTransport/createUnidirectionalStream)
      */
     createUnidirectionalStream(options?: WebTransportSendStreamOptions): Promise<WritableStream>;
+    /**
+     * The **`getStats()`** method of the WebTransport interface asynchronously returns an object containing HTTP/3 connection statistics.
+     *
+     * [MDN Reference](https://developer.mozilla.org/docs/Web/API/WebTransport/getStats)
+     */
+    getStats(): Promise<WebTransportConnectionStats>;
 }
 
 declare var WebTransport: {
@@ -41090,6 +41166,64 @@ interface WebTransportError extends DOMException {
 declare var WebTransportError: {
     prototype: WebTransportError;
     new(message?: string, options?: WebTransportErrorOptions): WebTransportError;
+};
+
+/**
+ * The **`WebTransportReceiveStream`** interface of the WebTransport API is a ReadableStream that can be used to read from an incoming unidirectional or bidirectional WebTransport stream.
+ * Available only in secure contexts.
+ *
+ * [MDN Reference](https://developer.mozilla.org/docs/Web/API/WebTransportReceiveStream)
+ */
+interface WebTransportReceiveStream extends ReadableStream {
+    /**
+     * The **`getStats()`** method of the WebTransportReceiveStream interface asynchronously returns an object containing statistics for the current stream.
+     *
+     * [MDN Reference](https://developer.mozilla.org/docs/Web/API/WebTransportReceiveStream/getStats)
+     */
+    getStats(): Promise<WebTransportReceiveStreamStats>;
+}
+
+declare var WebTransportReceiveStream: {
+    prototype: WebTransportReceiveStream;
+    new(): WebTransportReceiveStream;
+};
+
+/**
+ * The **`WebTransportSendStream`** interface of the WebTransport API is a specialized WritableStream that is used to send outbound data in both unidirectional or bidirectional WebTransport streams.
+ * Available only in secure contexts.
+ *
+ * [MDN Reference](https://developer.mozilla.org/docs/Web/API/WebTransportSendStream)
+ */
+interface WebTransportSendStream extends WritableStream {
+    /**
+     * The **`sendOrder`** property of the WebTransportSendStream interface indicates the send priority of this stream relative to other streams for which the value has been set.
+     *
+     * [MDN Reference](https://developer.mozilla.org/docs/Web/API/WebTransportSendStream/sendOrder)
+     */
+    sendOrder: number;
+    /**
+     * The **`getStats()`** method of the WebTransportSendStream interface asynchronously returns an object containing statistics for the current stream.
+     *
+     * [MDN Reference](https://developer.mozilla.org/docs/Web/API/WebTransportSendStream/getStats)
+     */
+    getStats(): Promise<WebTransportSendStreamStats>;
+    getWriter(): WebTransportWriter;
+}
+
+declare var WebTransportSendStream: {
+    prototype: WebTransportSendStream;
+    new(): WebTransportSendStream;
+};
+
+/** Available only in secure contexts. */
+interface WebTransportWriter extends WritableStreamDefaultWriter {
+    atomicWrite(chunk?: any): Promise<void>;
+    commit(): void;
+}
+
+declare var WebTransportWriter: {
+    prototype: WebTransportWriter;
+    new(): WebTransportWriter;
 };
 
 /**
@@ -44212,7 +44346,7 @@ type SanitizerElementWithAttributes = string | SanitizerElementNamespaceWithAttr
 type SelectionDirection = "forward" | "backward" | "none";
 type TexImageSource = ImageBitmap | ImageData | HTMLImageElement | HTMLCanvasElement | HTMLVideoElement | OffscreenCanvas | VideoFrame;
 type TimerHandler = string | Function;
-type Transferable = OffscreenCanvas | ImageBitmap | MessagePort | MediaSourceHandle | ReadableStream | WritableStream | TransformStream | AudioData | VideoFrame | RTCDataChannel | ArrayBuffer;
+type Transferable = OffscreenCanvas | ImageBitmap | MessagePort | MediaSourceHandle | ReadableStream | WritableStream | TransformStream | AudioData | VideoFrame | RTCDataChannel | WebTransportSendStream | WebTransportReceiveStream | ArrayBuffer;
 type URLPatternInput = string | URLPatternInit;
 type Uint32List = Uint32Array<ArrayBufferLike> | GLuint[];
 type VibratePattern = number | number[];
@@ -44452,6 +44586,7 @@ type WakeLockType = "screen";
 type WebGLPowerPreference = "default" | "high-performance" | "low-power";
 type WebTransportCongestionControl = "default" | "low-latency" | "throughput";
 type WebTransportErrorSource = "session" | "stream";
+type WebTransportReliabilityMode = "pending" | "reliable-only" | "supports-unreliable";
 type WorkerType = "classic" | "module";
 type WriteCommandType = "seek" | "truncate" | "write";
 type XMLHttpRequestResponseType = "" | "arraybuffer" | "blob" | "document" | "json" | "text";

@@ -1414,6 +1414,17 @@ declare var URLSearchParams: {
     new(init?: string[][] | Record<string, string> | string | URLSearchParams): URLSearchParams;
 };
 
+/** Available only in secure contexts. */
+interface WebTransportWriter extends WritableStreamDefaultWriter {
+    atomicWrite(chunk?: any): Promise<void>;
+    commit(): void;
+}
+
+declare var WebTransportWriter: {
+    prototype: WebTransportWriter;
+    new(): WebTransportWriter;
+};
+
 /**
  * The **`WorkletGlobalScope`** interface is an abstract class that specific worklet scope classes inherit from. Each WorkletGlobalScope defines a new global environment.
  * Available only in secure contexts.
