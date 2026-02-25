@@ -260,7 +260,7 @@ declare var AbortSignal: {
      *
      * [MDN Reference](https://developer.mozilla.org/docs/Web/API/AbortSignal/any_static)
      */
-    any(signals: AbortSignal[]): AbortSignal;
+    any(signals: Iterable<AbortSignal>): AbortSignal;
 };
 
 /**
@@ -766,7 +766,7 @@ interface MessageEvent<T = any> extends Event {
      */
     readonly source: MessageEventSource | null;
     /** @deprecated */
-    initMessageEvent(type: string, bubbles?: boolean, cancelable?: boolean, data?: any, origin?: string, lastEventId?: string, source?: MessageEventSource | null, ports?: MessagePort[]): void;
+    initMessageEvent(type: string, bubbles?: boolean, cancelable?: boolean, data?: any, origin?: string, lastEventId?: string, source?: MessageEventSource | null, ports?: Iterable<MessagePort>): void;
 }
 
 declare var MessageEvent: {
@@ -899,6 +899,10 @@ declare var ReadableByteStreamController: {
     new(): ReadableByteStreamController;
 };
 
+
+interface ReadableStreamAsyncIterator<T> extends AsyncIteratorObject<T, BuiltinIteratorReturn, unknown> {
+    [Symbol.asyncIterator](): ReadableStreamAsyncIterator<T>;
+}
 /**
  * The **`ReadableStream`** interface of the Streams API represents a readable stream of byte data. The Fetch API offers a concrete instance of a ReadableStream through the body property of a Response object.
  *
@@ -943,6 +947,8 @@ interface ReadableStream<R = any> {
      * [MDN Reference](https://developer.mozilla.org/docs/Web/API/ReadableStream/tee)
      */
     tee(): [ReadableStream<R>, ReadableStream<R>];
+    [Symbol.asyncIterator](options?: ReadableStreamIteratorOptions): ReadableStreamAsyncIterator<R>;
+    values(options?: ReadableStreamIteratorOptions): ReadableStreamAsyncIterator<R>;
 }
 
 declare var ReadableStream: {
@@ -1351,6 +1357,10 @@ declare var URL: {
     parse(url: string | URL, base?: string | URL): URL | null;
 };
 
+
+interface URLSearchParamsIterator<T> extends IteratorObject<T, BuiltinIteratorReturn, unknown> {
+    [Symbol.iterator](): URLSearchParamsIterator<T>;
+}
 /**
  * The **`URLSearchParams`** interface defines utility methods to work with the query string of a URL.
  *
@@ -1407,11 +1417,18 @@ interface URLSearchParams {
     sort(): void;
     toString(): string;
     forEach(callbackfn: (value: string, key: string, parent: URLSearchParams) => void, thisArg?: any): void;
+    [Symbol.iterator](): URLSearchParamsIterator<[string, string]>;
+    /** Returns an array of key, value pairs for every entry in the search params. */
+    entries(): URLSearchParamsIterator<[string, string]>;
+    /** Returns a list of keys in the search params. */
+    keys(): URLSearchParamsIterator<string>;
+    /** Returns a list of values in the search params. */
+    values(): URLSearchParamsIterator<string>;
 }
 
 declare var URLSearchParams: {
     prototype: URLSearchParams;
-    new(init?: string[][] | Record<string, string> | string | URLSearchParams): URLSearchParams;
+    new(init?: Iterable<string[]> | Record<string, string> | string): URLSearchParams;
 };
 
 /**
@@ -1584,7 +1601,7 @@ declare namespace WebAssembly {
 
     var Exception: {
         prototype: Exception;
-        new(exceptionTag: Tag, payload: any[], options?: ExceptionOptions): Exception;
+        new(exceptionTag: Tag, payload: Iterable<any>, options?: ExceptionOptions): Exception;
     };
 
     /**
@@ -1917,7 +1934,7 @@ interface Console {
      *
      * [MDN Reference](https://developer.mozilla.org/docs/Web/API/console/table_static)
      */
-    table(tabularData?: any, properties?: string[]): void;
+    table(tabularData?: any, properties?: Iterable<string>): void;
     /**
      * The **`console.time()`** static method starts a timer you can use to track how long an operation takes. You give each timer a unique name, and may have up to 10,000 timers running on a given page. When you call console.timeEnd() with the same name, the browser will output the time, in milliseconds, that elapsed since the timer was started.
      *
@@ -2038,41 +2055,3 @@ type Transferable = MessagePort | ReadableStream | WritableStream | TransformStr
 type CompressionFormat = "deflate" | "deflate-raw" | "gzip";
 type ReadableStreamReaderMode = "byob";
 type ReadableStreamType = "bytes";
-
-
-/////////////////////////////
-/// AudioWorklet Iterable APIs
-/////////////////////////////
-
-interface MessageEvent<T = any> {
-    /** @deprecated */
-    initMessageEvent(type: string, bubbles?: boolean, cancelable?: boolean, data?: any, origin?: string, lastEventId?: string, source?: MessageEventSource | null, ports?: Iterable<MessagePort>): void;
-}
-
-interface URLSearchParamsIterator<T> extends IteratorObject<T, BuiltinIteratorReturn, unknown> {
-    [Symbol.iterator](): URLSearchParamsIterator<T>;
-}
-
-interface URLSearchParams {
-    [Symbol.iterator](): URLSearchParamsIterator<[string, string]>;
-    /** Returns an array of key, value pairs for every entry in the search params. */
-    entries(): URLSearchParamsIterator<[string, string]>;
-    /** Returns a list of keys in the search params. */
-    keys(): URLSearchParamsIterator<string>;
-    /** Returns a list of values in the search params. */
-    values(): URLSearchParamsIterator<string>;
-}
-
-
-/////////////////////////////
-/// AudioWorklet Async Iterable APIs
-/////////////////////////////
-
-interface ReadableStreamAsyncIterator<T> extends AsyncIteratorObject<T, BuiltinIteratorReturn, unknown> {
-    [Symbol.asyncIterator](): ReadableStreamAsyncIterator<T>;
-}
-
-interface ReadableStream<R = any> {
-    [Symbol.asyncIterator](options?: ReadableStreamIteratorOptions): ReadableStreamAsyncIterator<R>;
-    values(options?: ReadableStreamIteratorOptions): ReadableStreamAsyncIterator<R>;
-}

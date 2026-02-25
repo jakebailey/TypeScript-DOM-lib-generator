@@ -241,20 +241,30 @@ export function emitWebIdl(
     getParentsWithConstant,
   );
 
+  // Shared computation for sequence typedef resolution used by iterable emission
+  const sequenceTypedefs = !webidl.typedefs
+    ? []
+    : webidl.typedefs.typedef
+        .filter((typedef) => Array.isArray(typedef.type))
+        .map((typedef) => ({
+          ...typedef,
+          type: (typedef.type as Browser.Typed[]).filter(
+            (t) => t.type === "sequence",
+          ),
+        }))
+        .filter((typedef) => typedef.type.length);
+  const sequenceTypedefMap = arrayToMap(
+    sequenceTypedefs,
+    (t) => t.name,
+    (t) => t,
+  );
+
   switch (iterator) {
     case "sync":
       return emitES6DomIterators();
     case "async":
       return emitES2018DomAsyncIterators();
     default:
-      if (compilerBehavior.includeIterable) {
-        const main = emit();
-        iterator = "sync";
-        const iterables = emitES6DomIterators();
-        iterator = "async";
-        const asyncIterables = emitES2018DomAsyncIterators();
-        return [main, iterables, asyncIterables].join("\n\n");
-      }
       return emit();
   }
 
@@ -773,7 +783,10 @@ export function emitWebIdl(
         p = { ...p, additionalTypes: [...(p.additionalTypes ?? [])] };
         p.additionalTypes!.push("URL");
       }
-      const pType = convertDomTypeToTsType(p);
+      const pType =
+        compilerBehavior.includeIterable && !p.overrideType
+          ? convertTypedToIterable(p)
+          : convertDomTypeToTsType(p);
 
       const isOptional = !p.variadic && p.optional;
       const variadicParams = p.variadic && pType.indexOf("|") !== -1;
@@ -1307,6 +1320,181 @@ export function emitWebIdl(
       .forEach(emitNamedConstructor);
   }
 
+  // https://webidl.spec.whatwg.org/#dfn-indexed-property-getter
+  function isIndexedPropertyGetter(m: Browser.AnonymousMethod) {
+    return (
+      m.getter &&
+      m.signature[0]?.param?.length === 1 &&
+      typeof m.signature[0].param[0].type === "string" &&
+      integerTypes.has(m.signature[0].param[0].type)
+    );
+  }
+
+  function hasSequenceArgument(s: Browser.Signature) {
+    function typeIncludesSequence(type: string | Browser.Typed[]): boolean {
+      if (Array.isArray(type)) {
+        return type.some((t) => typeIncludesSequence(t.type));
+      }
+      return type === "sequence" || !!sequenceTypedefMap[type];
+    }
+    return s.param?.some(
+      (p) => !p.overrideType && typeIncludesSequence(p.type),
+    );
+  }
+
+  function replaceTypedefsInSignatures(
+    signatures: Browser.Signature[],
+  ): Browser.Signature[] {
+    return signatures.map((s) => {
+      const params = s.param!.map((p) => {
+        const typedef =
+          typeof p.type === "string" ? sequenceTypedefMap[p.type] : undefined;
+        if (!typedef) {
+          return p;
+        }
+        return { ...p, type: typedef.type };
+      });
+      return { ...s, param: params };
+    });
+  }
+
+  function getTypedefIterableExtras(typeName: string): string | undefined {
+    const typedef = sequenceTypedefMap[typeName];
+    if (!typedef) {
+      return undefined;
+    }
+
+    const iterableParts: string[] = [];
+    function collect(typed: Browser.Typed) {
+      if (typeof typed.type === "string") {
+        if (typed.type === "sequence") {
+          const subtypeString = arrayify(typed.subtype)
+            .map((t) => convertDomTypeToTsType(t))
+            .join(", ");
+          iterableParts.push(`Iterable<${subtypeString}>`);
+        }
+      } else {
+        for (const t of typed.type) {
+          collect(t);
+        }
+      }
+    }
+    collect(typedef);
+    return iterableParts.length > 0 ? iterableParts.join(" | ") : undefined;
+  }
+
+  function convertTypedToIterable(obj: Browser.Typed): string {
+    if (typeof obj.type === "string") {
+      if (obj.type === "sequence") {
+        const subtypeString = arrayify(obj.subtype)
+          .map((t) => convertDomTypeToTsType(t))
+          .join(", ");
+        return `Iterable<${subtypeString}>`;
+      }
+      if (compilerBehavior.includeIterable) {
+        const extras = getTypedefIterableExtras(obj.type);
+        if (extras) {
+          const base = convertDomTypeToTsType({ ...obj, nullable: undefined });
+          const result = `${base} | ${extras}`;
+          return obj.nullable ? makeNullable(result) : result;
+        }
+      }
+      return convertDomTypeToTsType(obj);
+    }
+    const result = obj.type.map((t) => convertTypedToIterable(t)).join(" | ");
+    return obj.nullable ? makeNullable(result) : result;
+  }
+
+  function replaceSequencesWithIterables(
+    signatures: Browser.Signature[],
+  ): Browser.Signature[] {
+    return signatures.map((s) => {
+      const params = s.param!.map((p) => {
+        if (p.overrideType) {
+          return p;
+        }
+        const converted = convertTypedToIterable(p);
+        const original = convertDomTypeToTsType(p);
+        if (converted === original) {
+          return p;
+        }
+        return {
+          ...p,
+          overrideType: p.nullable ? `(${converted}) | null` : converted,
+        };
+      });
+      return { ...s, param: params };
+    });
+  }
+
+  function getSyncIterableSubtypes(i: Browser.Interface) {
+    if (i.iterator && i.iterator.kind !== "async_iterable") {
+      if (i.iterator.type.length === 1) {
+        return [convertDomTypeToTsType(i.iterator.type[0])];
+      }
+      return i.iterator.type.map(convertDomTypeToTsType);
+    } else if (i.name !== "Window") {
+      const anonymousGetter = i.anonymousMethods?.method.find(
+        isIndexedPropertyGetter,
+      );
+      const iterableGetter =
+        anonymousGetter ??
+        (i.methods
+          ? mapToArray(i.methods.method).find(isIndexedPropertyGetter)
+          : undefined);
+      if (iterableGetter) {
+        return [
+          convertDomTypeToTsType({
+            type: iterableGetter.signature[0].type,
+            overrideType: iterableGetter.signature[0].overrideType,
+          }),
+        ];
+      }
+    }
+  }
+
+  function getAsyncIterableSubtypes(i: Browser.Interface) {
+    if (i.iterator && i.iterator.kind === "async_iterable") {
+      if (i.iterator.type.length === 1) {
+        return [convertDomTypeToTsType(i.iterator.type[0])];
+      }
+      return i.iterator.type.map(convertDomTypeToTsType);
+    }
+  }
+
+  function getMethodsWithSequence(i: Browser.Interface): Browser.Method[] {
+    return mapToArray(i.methods ? i.methods.method : {})
+      .filter((m) => m.signature && !m.overrideSignatures && !m.static)
+      .map((m) => ({
+        ...m,
+        signature: replaceSequencesWithIterables(
+          replaceTypedefsInSignatures(m.signature.filter(hasSequenceArgument)),
+        ),
+      }))
+      .filter((m) => m.signature.length)
+      .sort(compareName);
+  }
+
+  function getIteratorExtends(
+    iterator?: Browser.Iterator,
+    subtypes?: string[],
+  ) {
+    if (!iterator || !subtypes) {
+      return "";
+    }
+    const base =
+      iterator.kind === "maplike"
+        ? `Map<${subtypes[0]}, ${subtypes[1]}>`
+        : iterator.kind === "setlike"
+          ? `Set<${subtypes[0]}>`
+          : undefined;
+    if (!base) {
+      return "";
+    }
+    const result = iterator.readonly ? `Readonly${base}` : base;
+    return `extends ${result} `;
+  }
+
   function emitInterfaceDeclaration(i: Browser.Interface) {
     function processIName(iName: string) {
       return extendConflictsBaseTypes[iName] ? `${iName}Base` : iName;
@@ -1347,6 +1535,15 @@ export function emitWebIdl(
       .concat(getImplementList(i.name).map(processMixinName))
       .filter((i) => i !== "Object")
       .map(processExtends);
+
+    if (compilerBehavior.includeIterable) {
+      const subtypes = getSyncIterableSubtypes(i);
+      const ext = getIteratorExtends(i.iterator, subtypes);
+      if (ext) {
+        // ext is "extends Foo ", trim to just the type name
+        finalExtends.push(ext.slice("extends ".length).trimEnd());
+      }
+    }
 
     if (finalExtends.length) {
       printer.print(` extends ${assertUnique(finalExtends).join(", ")}`);
@@ -1485,6 +1682,10 @@ export function emitWebIdl(
     printer.clearStack();
     emitInterfaceEventMap(i);
 
+    if (compilerBehavior.includeIterable) {
+      emitSelfIterators(i);
+    }
+
     emitInterfaceDeclaration(i);
     printer.increaseIndent();
 
@@ -1492,6 +1693,11 @@ export function emitWebIdl(
     emitConstants(i);
     emitEventHandlers(/*prefix*/ "", i);
     emitIndexers("InstanceOnly", i);
+
+    if (compilerBehavior.includeIterable) {
+      emitSyncIteratorMethods(i);
+      emitAsyncIterableMembers(i);
+    }
 
     printer.decreaseIndent();
     printer.printLine("}");
@@ -1772,127 +1978,41 @@ export function emitWebIdl(
     }
   }
 
+  function emitSelfIterators(i: Browser.Interface) {
+    const syncSubtypes = getSyncIterableSubtypes(i);
+    if (i.iterator?.kind === "iterable" && syncSubtypes?.length === 2) {
+      emitSelfIterator(i);
+    }
+    if (getAsyncIterableSubtypes(i)) {
+      emitSelfIterator(i);
+    }
+  }
+
+  function emitSyncIterableMembers(i: Browser.Interface) {
+    const methodsWithSequence = getMethodsWithSequence(i);
+    methodsWithSequence.forEach((m) => emitMethod("", m, new Set()));
+    emitSyncIteratorMethods(i);
+  }
+
+  function emitSyncIteratorMethods(i: Browser.Interface) {
+    const subtypes = getSyncIterableSubtypes(i);
+    if (subtypes) {
+      emitIterableMethods(i, getName(i), subtypes);
+    }
+  }
+
+  function emitAsyncIterableMembers(i: Browser.Interface) {
+    const subtypes = getAsyncIterableSubtypes(i);
+    if (subtypes) {
+      emitIterableMethods(i, getName(i), subtypes);
+    }
+  }
+
   function emitIterator(i: Browser.Interface) {
-    // https://webidl.spec.whatwg.org/#dfn-indexed-property-getter
-    const isIndexedPropertyGetter = (m: Browser.AnonymousMethod) =>
-      m.getter &&
-      m.signature[0]?.param?.length === 1 &&
-      typeof m.signature[0].param[0].type === "string" &&
-      integerTypes.has(m.signature[0].param[0].type);
+    const subtypes = getSyncIterableSubtypes(i);
+    const hasMethodsWithSequence = getMethodsWithSequence(i).length > 0;
 
-    function findIterableGetter() {
-      const anonymousGetter = i.anonymousMethods?.method.find(
-        isIndexedPropertyGetter,
-      );
-
-      if (anonymousGetter) {
-        return anonymousGetter;
-      } else if (i.methods) {
-        return mapToArray(i.methods.method).find(isIndexedPropertyGetter);
-      } else {
-        return undefined;
-      }
-    }
-
-    function getIteratorSubtypes() {
-      if (i.iterator && i.iterator.kind !== "async_iterable") {
-        if (i.iterator.type.length === 1) {
-          return [convertDomTypeToTsType(i.iterator.type[0])];
-        }
-        return i.iterator.type.map(convertDomTypeToTsType);
-      } else if (i.name !== "Window") {
-        const iterableGetter = findIterableGetter();
-        if (iterableGetter) {
-          return [
-            convertDomTypeToTsType({
-              type: iterableGetter.signature[0].type,
-              overrideType: iterableGetter.signature[0].overrideType,
-            }),
-          ];
-        }
-      }
-    }
-
-    function getIteratorExtends(
-      iterator?: Browser.Iterator,
-      subtypes?: string[],
-    ) {
-      if (!iterator || !subtypes) {
-        return "";
-      }
-      const base =
-        iterator.kind === "maplike"
-          ? `Map<${subtypes[0]}, ${subtypes[1]}>`
-          : iterator.kind === "setlike"
-            ? `Set<${subtypes[0]}>`
-            : undefined;
-      if (!base) {
-        return "";
-      }
-      const result = iterator.readonly ? `Readonly${base}` : base;
-      return `extends ${result} `;
-    }
-
-    function hasSequenceArgument(s: Browser.Signature) {
-      function typeIncludesSequence(type: string | Browser.Typed[]): boolean {
-        if (Array.isArray(type)) {
-          return type.some((t) => typeIncludesSequence(t.type));
-        }
-        return type === "sequence" || !!sequenceTypedefMap[type];
-      }
-      return s.param?.some(
-        (p) => !p.overrideType && typeIncludesSequence(p.type),
-      );
-    }
-
-    function replaceTypedefsInSignatures(
-      signatures: Browser.Signature[],
-    ): Browser.Signature[] {
-      return signatures.map((s) => {
-        const params = s.param!.map((p) => {
-          const typedef =
-            typeof p.type === "string" ? sequenceTypedefMap[p.type] : undefined;
-          if (!typedef) {
-            return p;
-          }
-          return { ...p, type: typedef.type };
-        });
-        return { ...s, param: params };
-      });
-    }
-
-    const sequenceTypedefs = !webidl.typedefs
-      ? []
-      : webidl.typedefs.typedef
-          .filter((typedef) => Array.isArray(typedef.type))
-          .map((typedef) => ({
-            ...typedef,
-            type: (typedef.type as Browser.Typed[]).filter(
-              (t) => t.type === "sequence",
-            ),
-          }))
-          .filter((typedef) => typedef.type.length);
-    const sequenceTypedefMap = arrayToMap(
-      sequenceTypedefs,
-      (t) => t.name,
-      (t) => t,
-    );
-
-    const subtypes = getIteratorSubtypes();
-    const methodsWithSequence: Browser.Method[] = mapToArray(
-      i.methods ? i.methods.method : {},
-    )
-      .filter((m) => m.signature && !m.overrideSignatures && !m.static)
-      .map((m) => ({
-        ...m,
-        signature: replaceTypedefsInSignatures(
-          m.signature.filter(hasSequenceArgument),
-        ),
-      }))
-      .filter((m) => m.signature.length)
-      .sort(compareName);
-
-    if (!subtypes && !methodsWithSequence.length) {
+    if (!subtypes && !hasMethodsWithSequence) {
       return;
     }
 
@@ -1913,28 +2033,14 @@ export function emitWebIdl(
     );
     printer.increaseIndent();
 
-    methodsWithSequence.forEach((m) => emitMethod("", m, new Set()));
-
-    if (subtypes) {
-      emitIterableMethods(i, name, subtypes);
-    }
+    emitSyncIterableMembers(i);
 
     printer.decreaseIndent();
     printer.printLine("}");
   }
 
   function emitAsyncIterator(i: Browser.Interface) {
-    function getAsyncIteratorSubtypes() {
-      if (i.iterator && i.iterator.kind === "async_iterable") {
-        if (i.iterator.type.length === 1) {
-          return [convertDomTypeToTsType(i.iterator.type[0])];
-        }
-        return i.iterator.type.map(convertDomTypeToTsType);
-      }
-    }
-
-    const subtypes = getAsyncIteratorSubtypes();
-    if (!subtypes) {
+    if (!getAsyncIterableSubtypes(i)) {
       return;
     }
 
@@ -1950,7 +2056,7 @@ export function emitWebIdl(
     printer.printLine(`interface ${nameWithTypeParameters} {`);
     printer.increaseIndent();
 
-    emitIterableMethods(i, name, subtypes);
+    emitAsyncIterableMembers(i);
 
     printer.decreaseIndent();
     printer.printLine("}");
