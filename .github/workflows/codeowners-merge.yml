@@ -5,16 +5,42 @@ on:
   pull_request_review: { types: [submitted] }
 
 jobs:
-  build:
+  check-merge-command:
     if: >-
       github.repository == 'microsoft/TypeScript-DOM-lib-generator' &&
-      !(
-        github.event_name == 'issue_comment' &&
-        github.event.issue.pull_request &&
-        contains(github.event.comment.body, 'lgtm') &&
-        !contains(github.event.comment.body, 'lgtm but') &&
-        !contains(github.event.comment.body, 'lgtm, but')
-      )
+      github.event_name == 'issue_comment' &&
+      github.event.issue.pull_request &&
+      contains(github.event.comment.body, 'lgtm')
+    runs-on: ubuntu-latest
+    permissions: {}
+    outputs:
+      valid: ${{ steps.check.outputs.valid }}
+
+    steps:
+      - name: Check merge command
+        id: check
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        run: |
+          node <<'EOF'
+          const fs = require("fs");
+          const body = process.env.COMMENT_BODY.toLowerCase();
+          const index = body.indexOf("lgtm");
+          const quoteCharacters = ['"', "'", "`"];
+          const valid =
+            !body.includes("lgtm but") &&
+            !body.includes("lgtm, but") &&
+            !quoteCharacters.includes(body.charAt(index - 1)) &&
+            !quoteCharacters.includes(body.charAt(index + "lgtm".length));
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `valid=${valid}\n`);
+          EOF
+
+  build:
+    needs: check-merge-command
+    if: >-
+      always() &&
+      github.repository == 'microsoft/TypeScript-DOM-lib-generator' &&
+      needs.check-merge-command.outputs.valid != 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -33,13 +59,10 @@ jobs:
           if_no_maintainers_assign: '@sandersn @jakebailey'
 
   merge:
+    needs: check-merge-command
     if: >-
       github.repository == 'microsoft/TypeScript-DOM-lib-generator' &&
-      github.event_name == 'issue_comment' &&
-      github.event.issue.pull_request &&
-      contains(github.event.comment.body, 'lgtm') &&
-      !contains(github.event.comment.body, 'lgtm but') &&
-      !contains(github.event.comment.body, 'lgtm, but')
+      needs.check-merge-command.outputs.valid == 'true'
     runs-on: ubuntu-latest
     environment:
       name: azure
