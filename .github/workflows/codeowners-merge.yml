@@ -2,9 +2,33 @@ name: Codeowners merging
 on:
   pull_request_target: { types: [opened] }
   issue_comment: { types: [created] }
-  pull_request_review: { types: [submitted] }
 
 jobs:
+  announce:
+    if: >-
+      github.repository == 'microsoft/TypeScript-DOM-lib-generator' &&
+      github.event_name == 'pull_request_target'
+    runs-on: ubuntu-slim
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: read
+
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const { pathToFileURL } = await import("node:url");
+            const moduleUrl = pathToFileURL(
+              `${process.env.GITHUB_WORKSPACE}/.github/scripts/codeowners-merge.mjs`,
+            );
+            const { announcePullRequest } = await import(moduleUrl);
+            await announcePullRequest({ github, context });
+
   check-merge-command:
     if: >-
       github.repository == 'microsoft/TypeScript-DOM-lib-generator' &&
@@ -12,51 +36,21 @@ jobs:
       github.event.issue.pull_request &&
       contains(github.event.comment.body, 'lgtm')
     runs-on: ubuntu-slim
-    permissions: {}
+    permissions:
+      contents: read
     outputs:
       valid: ${{ steps.check.outputs.valid }}
 
     steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: main
+          persist-credentials: false
       - name: Check merge command
         id: check
         env:
           COMMENT_BODY: ${{ github.event.comment.body }}
-        run: |
-          node <<'EOF'
-          const fs = require("fs");
-          const body = process.env.COMMENT_BODY.toLowerCase();
-          const index = body.indexOf("lgtm");
-          const quoteCharacters = ['"', "'", "`"];
-          const valid =
-            !body.includes("lgtm but") &&
-            !body.includes("lgtm, but") &&
-            !quoteCharacters.includes(body.charAt(index - 1)) &&
-            !quoteCharacters.includes(body.charAt(index + "lgtm".length));
-          fs.appendFileSync(process.env.GITHUB_OUTPUT, `valid=${valid}\n`);
-          EOF
-
-  build:
-    needs: check-merge-command
-    if: >-
-      always() &&
-      github.repository == 'microsoft/TypeScript-DOM-lib-generator' &&
-      needs.check-merge-command.outputs.valid != 'true'
-    runs-on: ubuntu-slim
-    permissions:
-      contents: write
-      issues: write
-      pull-requests: write
-
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
-      - name: Run Codeowners merge check
-        uses: OSS-Docs-Tools/code-owner-self-merge@35e0f55671d1cebd7c0a53e199cb3a3a03678c2b # 1.6.8
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          merge_method: 'squash'
-          if_no_maintainers_add_label: 'maintainers'
-          if_no_maintainers_assign: '@sandersn @jakebailey'
+        run: node .github/scripts/codeowners-merge.mjs classify
 
   merge:
     needs: check-merge-command
@@ -74,6 +68,7 @@ jobs:
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
+          ref: main
           persist-credentials: false
       - uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3.0.0
         with:
@@ -89,14 +84,17 @@ jobs:
           owner: microsoft
           repositories: TypeScript-DOM-lib-generator
           permission-contents: write
+          permission-checks: read
           permission-issues: write
           permission-pull-requests: write
           permission-workflows: write
-      - name: Run Codeowners merge check
-        uses: OSS-Docs-Tools/code-owner-self-merge@35e0f55671d1cebd7c0a53e199cb3a3a03678c2b # 1.6.8
-        env:
-          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
-          merge_method: 'squash'
-          if_no_maintainers_add_label: 'maintainers'
-          if_no_maintainers_assign: '@sandersn @jakebailey'
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            const { pathToFileURL } = await import("node:url");
+            const moduleUrl = pathToFileURL(
+              `${process.env.GITHUB_WORKSPACE}/.github/scripts/codeowners-merge.mjs`,
+            );
+            const { mergePullRequest } = await import(moduleUrl);
+            await mergePullRequest({ github, context });

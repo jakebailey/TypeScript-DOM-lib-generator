@@ -1,5 +1,5 @@
 src/**/*.ts @saschanaz
-baselines/* @saschanaz
+baselines/**/* @saschanaz
 inputfiles/**/* @saschanaz
 unittests/**/* @saschanaz
 README.md @saschanaz
