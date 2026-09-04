@@ -120,6 +120,8 @@ test("matches every generated baseline in the repository", async () => {
   assert.deepEqual(ownersForPath(rules, "baselines/ts5.9/dom.generated.d.ts"), [
     "@saschanaz",
   ]);
+  assert.deepEqual(ownersForPath(rules, "README.md"), ["@saschanaz"]);
+  assert.deepEqual(ownersForPath(rules, "deploy/README.md"), []);
 });
 
 test("accepts only an exact LGTM command", () => {
