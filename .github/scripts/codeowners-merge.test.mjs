@@ -87,6 +87,14 @@ generated/ # Anyone with write access may approve
   assert.deepEqual(ownersForPath(rules, "generated/index.ts"), []);
 });
 
+test("supports escaped spaces in patterns", () => {
+  const rules = parseCodeowners(String.raw`
+docs/My\ File.md @docs-owner
+`);
+
+  assert.deepEqual(ownersForPath(rules, "docs/My File.md"), ["@docs-owner"]);
+});
+
 test("rejects unsupported CODEOWNERS syntax", () => {
   assert.throws(
     () => parseCodeowners("generated/[ab].ts @owner"),

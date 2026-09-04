@@ -70,15 +70,36 @@ function compilePattern(pattern) {
 export function parseCodeowners(contents) {
   const rules = [];
   for (const [index, rawLine] of contents.split(/\r?\n/).entries()) {
-    const commentIndex = rawLine.indexOf("#");
-    const line = rawLine
-      .slice(0, commentIndex === -1 ? rawLine.length : commentIndex)
-      .trim();
-    if (!line) {
+    const tokens = [];
+    let token = "";
+    for (
+      let characterIndex = 0;
+      characterIndex < rawLine.length;
+      characterIndex++
+    ) {
+      const character = rawLine[characterIndex];
+      if (character === "#") {
+        break;
+      }
+      if (character === "\\" && /\s/.test(rawLine[characterIndex + 1] ?? "")) {
+        token += rawLine[++characterIndex];
+      } else if (/\s/.test(character)) {
+        if (token) {
+          tokens.push(token);
+          token = "";
+        }
+      } else {
+        token += character;
+      }
+    }
+    if (token) {
+      tokens.push(token);
+    }
+    if (!tokens.length) {
       continue;
     }
 
-    const [pattern, ...owners] = line.split(/\s+/);
+    const [pattern, ...owners] = tokens;
     if (pattern.startsWith("!")) {
       throw new Error(
         `CODEOWNERS line ${index + 1} uses unsupported negation: ${pattern}`,
@@ -357,6 +378,8 @@ export async function mergePullRequest({ github, context, codeowners }) {
     return;
   }
 
+  // Intentionally validate the PR head rather than requiring it to contain the
+  // latest main; this preserves support for merging stale-but-green PRs.
   const checkState = await getCheckState(
     github,
     repository,
