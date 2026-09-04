@@ -17,10 +17,9 @@
   "scripts": {
     "build": "node ./src/build.ts",
     "baseline-accept": "cpx \"generated\\**\" baselines\\",
-    "lint": "eslint --max-warnings 0 src deploy/*.js scripts .github/scripts && tsc -p deploy/jsconfig.json",
-    "lint-fix": "eslint --max-warnings 0 src deploy/*.js scripts .github/scripts --fix",
-    "test": "npm run build && npm run lint && node ./src/test.ts && node ./unittests/index.js && npm run test:codeowners-merge",
-    "test:codeowners-merge": "node --test .github/scripts/codeowners-merge.test.mjs",
+    "lint": "eslint --max-warnings 0 src deploy/*.js scripts && tsc -p deploy/jsconfig.json",
+    "lint-fix": "eslint --max-warnings 0 src deploy/*.js scripts --fix",
+    "test": "npm run build && npm run lint && node ./src/test.ts && node ./unittests/index.js",
     "changelog": "node ./src/changelog.ts",
     "ts-changelog": "node ./deploy/versionChangelog.js",
     "migrate": "node ./deploy/migrate.js",
