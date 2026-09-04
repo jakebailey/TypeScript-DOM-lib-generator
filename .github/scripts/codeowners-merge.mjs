@@ -334,6 +334,15 @@ export async function mergePullRequest({ github, context, codeowners }) {
     pullRequest.data.base.sha,
     pullRequest.data.head.sha,
   );
+  if (!changedFiles.length) {
+    await comment(
+      github,
+      context,
+      pullNumber,
+      `Sorry @${sender}, this PR has no changed files owned by a code owner.`,
+    );
+    return;
+  }
   // This automation intentionally grants merge authority to listed users even
   // when they do not otherwise have repository write access.
   const senderOwner = `@${sender}`.toLowerCase();

@@ -415,3 +415,67 @@ test("does not merge when checks are pending", async () => {
   assert.equal(merged, false);
   assert.match(comments[0], /checks are pending/);
 });
+
+test("does not merge a PR with no changed files", async () => {
+  let merged = false;
+  const comments = [];
+  const github = {
+    paginate: async (method, parameters) => method(parameters),
+    rest: {
+      git: {
+        getCommit: async ({ commit_sha }) => ({
+          data: { tree: { sha: `${commit_sha}-tree` } },
+        }),
+        getTree: async () => ({
+          data: {
+            truncated: false,
+            tree: [],
+          },
+        }),
+      },
+      pulls: {
+        get: async () => ({
+          data: {
+            state: "open",
+            mergeable: true,
+            head: { sha: "head-sha" },
+            base: { sha: "base-sha" },
+          },
+        }),
+        merge: async () => {
+          merged = true;
+          return { data: { merged: true } };
+        },
+      },
+      repos: {
+        compareCommitsWithBasehead: async () => ({
+          data: { merge_base_commit: { sha: "merge-base" } },
+        }),
+      },
+      issues: {
+        createComment: async ({ body }) => {
+          comments.push(body);
+        },
+      },
+    },
+  };
+  const context = {
+    repo: { owner: "microsoft", repo: "TypeScript-DOM-lib-generator" },
+    payload: {
+      issue: { number: 123, pull_request: {} },
+      comment: { body: "LGTM" },
+      sender: { login: "not-a-codeowner" },
+    },
+    runId: 456,
+    serverUrl: "https://github.com",
+  };
+
+  await mergePullRequest({
+    github,
+    context,
+    codeowners: "src/**/*.ts @saschanaz",
+  });
+
+  assert.equal(merged, false);
+  assert.match(comments[0], /no changed files owned by a code owner/);
+});
