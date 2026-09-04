@@ -4,6 +4,8 @@ import test from "node:test";
 
 import {
   announcePullRequest,
+  classifyMergeCommand,
+  getCheckState,
   getChangedFiles,
   isMergeCommand,
   mergePullRequest,
@@ -128,6 +130,32 @@ test("accepts only an exact LGTM command", () => {
   assert.equal(isMergeCommand("`LGTM`"), false);
 });
 
+test("captures the reviewed head SHA with the merge command", async () => {
+  const outputs = new Map();
+  await classifyMergeCommand({
+    github: {
+      rest: {
+        pulls: {
+          get: async () => ({ data: { head: { sha: "reviewed-head" } } }),
+        },
+      },
+    },
+    context: {
+      repo: { owner: "microsoft", repo: "TypeScript-DOM-lib-generator" },
+      payload: {
+        issue: { number: 123, pull_request: {} },
+        comment: { body: "LGTM" },
+      },
+    },
+    core: {
+      setOutput: (name, value) => outputs.set(name, value),
+    },
+  });
+
+  assert.equal(outputs.get("valid"), "true");
+  assert.equal(outputs.get("head-sha"), "reviewed-head");
+});
+
 test("immutable diffs include both sides of a rename", async () => {
   const github = {
     rest: {
@@ -248,17 +276,78 @@ inputfiles/**/* @saschanaz
   assert.match(comments[0], /containing only "LGTM"/);
 });
 
+test("requires the baseline test workflow for direct baseline changes", async () => {
+  const github = {
+    paginate: async (method, parameters) => method(parameters),
+    rest: {
+      actions: {
+        listWorkflowRunsForRepo: async () => [
+          {
+            name: "CI",
+            run_number: 2,
+            status: "completed",
+            conclusion: "success",
+          },
+          {
+            name: "CodeQL Advanced",
+            run_number: 2,
+            status: "completed",
+            conclusion: "success",
+          },
+        ],
+      },
+      checks: {
+        listForRef: async () => [
+          {
+            name: "license/cla",
+            status: "completed",
+            conclusion: "success",
+            app: { slug: "microsoft-github-policy-service" },
+          },
+        ],
+      },
+    },
+  };
+
+  assert.equal(
+    await getCheckState(
+      github,
+      { owner: "microsoft", repo: "TypeScript-DOM-lib-generator" },
+      "head-sha",
+      ["baselines/dom.generated.d.ts"],
+    ),
+    "MISSING",
+  );
+});
+
 test("merges a green PR at the verified head SHA", async () => {
   const calls = [];
   const github = {
     paginate: async (method, parameters) => method(parameters),
     rest: {
+      actions: {
+        listWorkflowRunsForRepo: async () => [
+          {
+            name: "CI",
+            run_number: 2,
+            status: "completed",
+            conclusion: "success",
+          },
+          {
+            name: "CodeQL Advanced",
+            run_number: 2,
+            status: "completed",
+            conclusion: "success",
+          },
+        ],
+      },
       checks: {
         listForRef: async () => [
           {
-            name: "test",
+            name: "license/cla",
             status: "completed",
             conclusion: "success",
+            app: { slug: "microsoft-github-policy-service" },
           },
         ],
       },
@@ -323,6 +412,7 @@ test("merges a green PR at the verified head SHA", async () => {
   await mergePullRequest({
     github,
     context,
+    expectedHeadSha: "head-sha",
     codeowners: "src/**/*.ts @saschanaz",
   });
 
@@ -339,12 +429,29 @@ test("does not merge when checks are pending", async () => {
   const github = {
     paginate: async (method, parameters) => method(parameters),
     rest: {
+      actions: {
+        listWorkflowRunsForRepo: async () => [
+          {
+            name: "CI",
+            run_number: 2,
+            status: "in_progress",
+            conclusion: null,
+          },
+          {
+            name: "CodeQL Advanced",
+            run_number: 2,
+            status: "completed",
+            conclusion: "success",
+          },
+        ],
+      },
       checks: {
         listForRef: async () => [
           {
-            name: "test",
-            status: "in_progress",
-            conclusion: null,
+            name: "license/cla",
+            status: "completed",
+            conclusion: "success",
+            app: { slug: "microsoft-github-policy-service" },
           },
         ],
       },
@@ -409,6 +516,7 @@ test("does not merge when checks are pending", async () => {
   await mergePullRequest({
     github,
     context,
+    expectedHeadSha: "head-sha",
     codeowners: "src/**/*.ts @saschanaz",
   });
 
@@ -473,6 +581,7 @@ test("does not merge a PR with no changed files", async () => {
   await mergePullRequest({
     github,
     context,
+    expectedHeadSha: "head-sha",
     codeowners: "src/**/*.ts @saschanaz",
   });
 

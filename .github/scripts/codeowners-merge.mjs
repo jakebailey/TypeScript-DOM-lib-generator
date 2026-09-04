@@ -1,5 +1,4 @@
-import { appendFile, readFile } from "node:fs/promises";
-import { pathToFileURL } from "node:url";
+import { readFile } from "node:fs/promises";
 
 const codeownersUrl = new URL("../CODEOWNERS", import.meta.url);
 const mergeMessageSignature = "<!-- Message About Merging -->";
@@ -149,6 +148,21 @@ export function isMergeCommand(body) {
   return body.trim().toLowerCase() === "lgtm";
 }
 
+export async function classifyMergeCommand({ github, context, core }) {
+  const body = context.payload.comment?.body;
+  if (typeof body !== "string" || !isMergeCommand(body)) {
+    core.setOutput("valid", "false");
+    return;
+  }
+
+  const pullRequest = await github.rest.pulls.get({
+    ...context.repo,
+    pull_number: context.payload.issue.number,
+  });
+  core.setOutput("valid", "true");
+  core.setOutput("head-sha", pullRequest.data.head.sha);
+}
+
 async function loadCodeowners(codeowners) {
   return parseCodeowners(
     codeowners ?? (await readFile(codeownersUrl, { encoding: "utf8" })),
@@ -277,15 +291,57 @@ async function comment(github, context, issueNumber, body) {
   });
 }
 
-async function getCheckState(github, repository, headSha) {
-  const checkRuns = await github.paginate(github.rest.checks.listForRef, {
-    ...repository,
-    ref: headSha,
-    filter: "latest",
-    per_page: 100,
-  });
+export async function getCheckState(github, repository, headSha, changedFiles) {
+  const [checkRuns, workflowRuns] = await Promise.all([
+    github.paginate(github.rest.checks.listForRef, {
+      ...repository,
+      ref: headSha,
+      filter: "latest",
+      per_page: 100,
+    }),
+    github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
+      ...repository,
+      head_sha: headSha,
+      event: "pull_request",
+      per_page: 100,
+    }),
+  ]);
   if (!checkRuns.length) {
     return "NONE";
+  }
+
+  const requiredWorkflows = ["CI", "CodeQL Advanced"];
+  if (changedFiles.some((path) => /^baselines\/[^/]+$/.test(path))) {
+    requiredWorkflows.push("Runs with TypeScript Tests");
+  }
+  for (const workflowName of requiredWorkflows) {
+    const latestRun = workflowRuns
+      .filter((run) => run.name === workflowName)
+      .sort((left, right) => right.run_number - left.run_number)[0];
+    if (!latestRun) {
+      return "MISSING";
+    }
+    if (latestRun.status !== "completed") {
+      return "PENDING";
+    }
+    if (latestRun.conclusion !== "success") {
+      return "FAILURE";
+    }
+  }
+
+  const cla = checkRuns.find(
+    (checkRun) =>
+      checkRun.name === "license/cla" &&
+      checkRun.app?.slug === "microsoft-github-policy-service",
+  );
+  if (!cla) {
+    return "MISSING";
+  }
+  if (cla.status !== "completed") {
+    return "PENDING";
+  }
+  if (cla.conclusion !== "success") {
+    return "FAILURE";
   }
 
   if (checkRuns.some((checkRun) => checkRun.status !== "completed")) {
@@ -300,7 +356,12 @@ async function getCheckState(github, repository, headSha) {
     : "FAILURE";
 }
 
-export async function mergePullRequest({ github, context, codeowners }) {
+export async function mergePullRequest({
+  github,
+  context,
+  expectedHeadSha,
+  codeowners,
+}) {
   const issue = context.payload.issue;
   const body = context.payload.comment?.body;
   if (!issue?.pull_request || typeof body !== "string") {
@@ -317,6 +378,18 @@ export async function mergePullRequest({ github, context, codeowners }) {
     ...repository,
     pull_number: pullNumber,
   });
+  if (
+    typeof expectedHeadSha !== "string" ||
+    pullRequest.data.head.sha !== expectedHeadSha
+  ) {
+    await comment(
+      github,
+      context,
+      pullNumber,
+      `Sorry @${sender}, this PR changed after the merge command. Please review it again.`,
+    );
+    return;
+  }
   if (pullRequest.data.state !== "open") {
     await comment(
       github,
@@ -393,6 +466,7 @@ export async function mergePullRequest({ github, context, codeowners }) {
     github,
     repository,
     pullRequest.data.head.sha,
+    changedFiles,
   );
   if (checkState !== "SUCCESS") {
     await comment(
@@ -449,25 +523,4 @@ export async function mergePullRequest({ github, context, codeowners }) {
     pullNumber,
     `Merging because @${sender} is a code owner of all the changes - thanks!`,
   );
-}
-
-async function main() {
-  if (process.argv[2] !== "classify") {
-    throw new Error(`Unknown command: ${process.argv[2] ?? ""}`);
-  }
-  if (!process.env.GITHUB_OUTPUT) {
-    throw new Error("GITHUB_OUTPUT is not set");
-  }
-
-  await appendFile(
-    process.env.GITHUB_OUTPUT,
-    `valid=${isMergeCommand(process.env.COMMENT_BODY ?? "")}\n`,
-  );
-}
-
-if (
-  process.argv[1] &&
-  import.meta.url === pathToFileURL(process.argv[1]).href
-) {
-  await main();
 }

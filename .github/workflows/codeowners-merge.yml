@@ -38,8 +38,10 @@ jobs:
     runs-on: ubuntu-slim
     permissions:
       contents: read
+      pull-requests: read
     outputs:
       valid: ${{ steps.check.outputs.valid }}
+      head-sha: ${{ steps.check.outputs.head-sha }}
 
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
@@ -48,9 +50,15 @@ jobs:
           persist-credentials: false
       - name: Check merge command
         id: check
-        env:
-          COMMENT_BODY: ${{ github.event.comment.body }}
-        run: node .github/scripts/codeowners-merge.mjs classify
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const { pathToFileURL } = await import("node:url");
+            const moduleUrl = pathToFileURL(
+              `${process.env.GITHUB_WORKSPACE}/.github/scripts/codeowners-merge.mjs`,
+            );
+            const { classifyMergeCommand } = await import(moduleUrl);
+            await classifyMergeCommand({ github, context, core });
 
   merge:
     needs: check-merge-command
@@ -83,12 +91,15 @@ jobs:
           key-id: ${{ vars.TYPESCRIPT_AUTOMATION_GITHUB_APP_KEY_ID }}
           owner: microsoft
           repositories: TypeScript-DOM-lib-generator
+          permission-actions: read
           permission-contents: write
           permission-checks: read
           permission-issues: write
           permission-pull-requests: write
           permission-workflows: write
       - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          EXPECTED_HEAD_SHA: ${{ needs.check-merge-command.outputs.head-sha }}
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
@@ -97,4 +108,8 @@ jobs:
               `${process.env.GITHUB_WORKSPACE}/.github/scripts/codeowners-merge.mjs`,
             );
             const { mergePullRequest } = await import(moduleUrl);
-            await mergePullRequest({ github, context });
+            await mergePullRequest({
+              github,
+              context,
+              expectedHeadSha: process.env.EXPECTED_HEAD_SHA,
+            });
