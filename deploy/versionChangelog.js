@@ -27,9 +27,10 @@ const go = () => {
     const toFileText = gitShowFile(`${name}@${to}`, filename);
 
     const notes = generateChangelogFrom(beforeFileText, toFileText);
-
-    console.log(`\n## \`${file.to}\`\n`);
-    console.log(notes.trim() === "" ? "No changes" : notes);
+    if (notes.trim() !== "") {
+      console.log(`\n## \`${file.to}\`\n`);
+      console.log(notes);
+    }
   }
 };
 

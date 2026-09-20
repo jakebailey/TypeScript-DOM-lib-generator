@@ -71,8 +71,10 @@ for (const dirName of fs.readdirSync(generatedDir)) {
 
       const title = `## \`${file}\``;
       const notes = generateChangelogFrom(oldFile, generatedDTSContent);
-      releaseNotes.push(title);
-      releaseNotes.push(notes.trim() === "" ? "No changes" : notes);
+      if (notes.trim() !== "") {
+        releaseNotes.push(title);
+        releaseNotes.push(notes);
+      }
 
       upload = upload || oldFile !== generatedDTSContent;
     } catch (error) {
