@@ -12,9 +12,53 @@ function gitLatestTag() {
   }).trim();
 }
 
-type InterfaceMembers = Map<string, Map<string, string[]>>;
+type AtomKind = "interface" | "declaration" | "member";
 
-function memberName(member: ts.TypeElement, source: ts.SourceFile) {
+interface ApiAtom {
+  key: string;
+  kind: AtomKind;
+  label: string;
+  parent?: string;
+  container?: boolean;
+  staticContainer?: boolean;
+  signatures: string[];
+}
+
+interface ApiModel {
+  atoms: Map<string, ApiAtom>;
+  unhandled: string[];
+}
+
+export type ChangelogChangeKind =
+  | "interface-added"
+  | "interface-removed"
+  | "member-added"
+  | "member-removed"
+  | "signature-changed"
+  | "declaration-added"
+  | "declaration-removed"
+  | "other-changed";
+
+export interface ChangelogChange {
+  key: string;
+  kind: ChangelogChangeKind;
+  label: string;
+}
+
+export interface ChangelogEntry {
+  group?: string;
+  changes: readonly ChangelogChange[];
+}
+
+function qualifiedName(prefix: string | undefined, name: string) {
+  return prefix ? `${prefix}.${name}` : name;
+}
+
+function quoted(name: string) {
+  return `\`${name}\``;
+}
+
+function memberIdentity(member: ts.TypeElement, source: ts.SourceFile) {
   if (ts.isConstructSignatureDeclaration(member)) {
     return "constructor";
   }
@@ -31,269 +75,449 @@ function memberName(member: ts.TypeElement, source: ts.SourceFile) {
   return ts.isMethodSignature(member) ? `${name}()` : name;
 }
 
-function mapMembers(
-  members: ts.NodeArray<ts.TypeElement>,
+function memberLabel(parent: string, member: string) {
+  if (member === "constructor") {
+    return `${quoted(parent)} constructor`;
+  }
+  if (member === "call signature" || member === "index signature") {
+    return `${quoted(parent)} ${member}`;
+  }
+  return quoted(`${parent}.${member}`);
+}
+
+function interfaceHeader(
+  declaration: ts.InterfaceDeclaration,
   source: ts.SourceFile,
-): Map<string, string[]> {
-  const memberMap = new Map<string, string[]>();
-  for (const member of members) {
-    const name = memberName(member, source);
-    if (!name) {
-      continue;
-    }
-    const signatures = memberMap.get(name) ?? [];
-    signatures.push(member.getText(source));
-    memberMap.set(name, signatures);
-  }
-  return memberMap;
+) {
+  const modifiers = declaration.modifiers
+    ?.map((modifier) => modifier.getText(source))
+    .join(" ");
+  const typeParameters = declaration.typeParameters
+    ? `<${declaration.typeParameters
+        .map((parameter) => parameter.getText(source))
+        .join(", ")}>`
+    : "";
+  const heritage = declaration.heritageClauses
+    ?.map((clause) => clause.getText(source))
+    .join(" ");
+  return [
+    modifiers,
+    `interface ${declaration.name.text}${typeParameters}`,
+    heritage,
+  ]
+    .filter(Boolean)
+    .join(" ");
 }
 
-function mapInterfaceToMembers(
-  interfaces: ts.InterfaceDeclaration[],
-  source: ts.SourceFile,
-): InterfaceMembers {
-  const interfaceToMemberMap: InterfaceMembers = new Map();
-  for (const decl of interfaces) {
-    interfaceToMemberMap.set(decl.name.text, mapMembers(decl.members, source));
+function declarationListKind(list: ts.VariableDeclarationList) {
+  if (list.flags & ts.NodeFlags.Const) {
+    return "const";
   }
-  return interfaceToMemberMap;
+  if (list.flags & ts.NodeFlags.Let) {
+    return "let";
+  }
+  return "var";
 }
 
-function mapOtherDeclarations(source: ts.SourceFile) {
-  const declarations = new Map<string, string[]>();
-  const staticMembers: InterfaceMembers = new Map();
-
-  function add(name: string, text: string) {
-    const texts = declarations.get(name) ?? [];
-    texts.push(text);
-    declarations.set(name, texts);
-  }
-
-  for (const statement of source.statements) {
-    if (ts.isVariableStatement(statement)) {
-      for (const declaration of statement.declarationList.declarations) {
-        const name = declaration.name.getText(source);
-        if (declaration.type && ts.isTypeLiteralNode(declaration.type)) {
-          staticMembers.set(name, mapMembers(declaration.type.members, source));
-        } else {
-          add(name, declaration.getText(source));
-        }
-      }
-    } else if (ts.isFunctionDeclaration(statement) && statement.name) {
-      add(`${statement.name.text}()`, statement.getText(source));
-    } else if (
-      (ts.isTypeAliasDeclaration(statement) ||
-        ts.isClassDeclaration(statement) ||
-        ts.isEnumDeclaration(statement)) &&
-      statement.name
-    ) {
-      add(statement.name.text, statement.getText(source));
-    }
-  }
-
-  return { declarations, staticMembers };
-}
-
-function extractTypesFromFile(file: string) {
+function buildApiModel(file: string): ApiModel {
   const source = ts.createSourceFile(
     "dom",
     file,
-    ts.ScriptTarget.ES2015,
-    /*setParentNodes */ true,
+    ts.ScriptTarget.Latest,
+    /* setParentNodes */ true,
   );
+  const atoms = new Map<string, ApiAtom>();
+  const unhandled: string[] = [];
 
-  const interfaceNames = source.statements
-    .filter(ts.isVariableStatement)
-    .map((v) => v.declarationList.declarations[0].name.getText(source));
-  const tsInterfacedecls = source.statements.filter(ts.isInterfaceDeclaration);
-  const idlInterfaceDecls = tsInterfacedecls.filter((i) =>
-    interfaceNames.includes(i.name.text),
-  );
-  const otherDecls = tsInterfacedecls.filter(
-    (i) => !interfaceNames.includes(i.name.text),
-  );
-
-  const interfaceToMemberMap = mapInterfaceToMembers(idlInterfaceDecls, source);
-  const otherToMemberMap = mapInterfaceToMembers(otherDecls, source);
-  const { declarations, staticMembers } = mapOtherDeclarations(source);
-
-  return {
-    interfaceToMemberMap,
-    otherToMemberMap,
-    staticMembers,
-    declarations,
-  };
-}
-
-function compareSet<T>(x: Set<T>, y: Set<T>) {
-  function intersection<T>(x: Set<T>, y: Set<T>) {
-    const result = new Set<T>();
-    for (const i of y) {
-      if (x.has(i)) {
-        result.add(i);
-      }
+  function addAtom(atom: Omit<ApiAtom, "signatures">, signature: string) {
+    const existing = atoms.get(atom.key);
+    if (existing) {
+      existing.signatures.push(signature);
+      return;
     }
-    return result;
+    atoms.set(atom.key, { ...atom, signatures: [signature] });
   }
-  function difference<T>(x: Set<T>, y: Set<T>) {
-    const result = new Set(x);
-    for (const i of y) {
-      result.delete(i);
-    }
-    return result;
-  }
-  const common = intersection(x, y);
-  const added = difference(y, common);
-  const removed = difference(x, common);
-  return { added, removed, common };
-}
 
-function diffTypes(previous: string, current: string) {
-  function diff(previousMap: InterfaceMembers, currentMap: InterfaceMembers) {
-    const { added, removed, common } = compareSet(
-      new Set(previousMap.keys()),
-      new Set(currentMap.keys()),
-    );
-    const modified = new Map<
-      string,
-      { added: Set<string>; removed: Set<string>; changed: Set<string> }
-    >();
-    for (const name of common) {
-      const previousMemberMap = previousMap.get(name)!;
-      const currentMemberMap = currentMap.get(name)!;
-      const previousMembers = new Set(previousMemberMap.keys());
-      const currentMembers = new Set(currentMemberMap.keys());
-      const { added, removed } = compareSet(previousMembers, currentMembers);
-      const changed = new Set<string>();
-      for (const memberName of compareSet(previousMembers, currentMembers)
-        .common) {
-        const previousSignatures = new Set(previousMemberMap.get(memberName)!);
-        const currentSignatures = new Set(currentMemberMap.get(memberName)!);
-        const signatureDiff = compareSet(previousSignatures, currentSignatures);
-        if (signatureDiff.added.size || signatureDiff.removed.size) {
-          changed.add(memberName);
-        }
-      }
-      if (!added.size && !removed.size && !changed.size) {
+  function addMembers(
+    parent: string,
+    members: ts.NodeArray<ts.TypeElement>,
+    source: ts.SourceFile,
+    containerKey: string,
+  ) {
+    for (const member of members) {
+      const identity = memberIdentity(member, source);
+      if (!identity) {
+        unhandled.push(member.getText(source));
         continue;
       }
-      modified.set(name, { added, removed, changed });
+      addAtom(
+        {
+          key: `member:${containerKey}:${identity}`,
+          kind: "member",
+          label: memberLabel(parent, identity),
+          parent,
+        },
+        member.getText(source),
+      );
     }
-    return { added, removed, modified };
   }
 
-  const previousTypes = extractTypesFromFile(previous);
-  const currentTypes = extractTypesFromFile(current);
-  const declarationNames = compareSet(
-    new Set(previousTypes.declarations.keys()),
-    new Set(currentTypes.declarations.keys()),
-  );
-  const changedDeclarations = new Set<string>();
-  for (const name of declarationNames.common) {
-    const previousDeclarations = new Set(previousTypes.declarations.get(name)!);
-    const currentDeclarations = new Set(currentTypes.declarations.get(name)!);
-    const declarationDiff = compareSet(
-      previousDeclarations,
-      currentDeclarations,
-    );
-    if (declarationDiff.added.size || declarationDiff.removed.size) {
-      changedDeclarations.add(name);
+  function visitStatements(
+    statements: ts.NodeArray<ts.Statement>,
+    prefix?: string,
+  ) {
+    for (const statement of statements) {
+      if (ts.isInterfaceDeclaration(statement)) {
+        const name = qualifiedName(prefix, statement.name.text);
+        addAtom(
+          {
+            key: `interface:${name}`,
+            kind: "interface",
+            label: quoted(name),
+            parent: name,
+            container: true,
+          },
+          interfaceHeader(statement, source),
+        );
+        addMembers(name, statement.members, source, `interface:${name}`);
+        continue;
+      }
+
+      if (ts.isVariableStatement(statement)) {
+        for (const declaration of statement.declarationList.declarations) {
+          const name = qualifiedName(prefix, declaration.name.getText(source));
+          if (declaration.type && ts.isTypeLiteralNode(declaration.type)) {
+            addAtom(
+              {
+                key: `variable:${name}`,
+                kind: "declaration",
+                label: quoted(name),
+                parent: name,
+                container: true,
+                staticContainer: true,
+              },
+              `${declarationListKind(statement.declarationList)} type literal`,
+            );
+            addMembers(
+              name,
+              declaration.type.members,
+              source,
+              `variable:${name}`,
+            );
+          } else {
+            addAtom(
+              {
+                key: `variable:${name}`,
+                kind: "declaration",
+                label: quoted(name),
+              },
+              `${declarationListKind(statement.declarationList)} ${declaration.getText(source)}`,
+            );
+          }
+        }
+        continue;
+      }
+
+      if (ts.isFunctionDeclaration(statement) && statement.name) {
+        const name = qualifiedName(prefix, `${statement.name.text}()`);
+        addAtom(
+          {
+            key: `function:${name}`,
+            kind: "declaration",
+            label: quoted(name),
+          },
+          statement.getText(source),
+        );
+        continue;
+      }
+
+      if (
+        ts.isTypeAliasDeclaration(statement) ||
+        ts.isClassDeclaration(statement) ||
+        ts.isEnumDeclaration(statement)
+      ) {
+        if (!statement.name) {
+          unhandled.push(statement.getText(source));
+          continue;
+        }
+        const name = qualifiedName(prefix, statement.name.text);
+        addAtom(
+          {
+            key: `${ts.SyntaxKind[statement.kind]}:${name}`,
+            kind: "declaration",
+            label: quoted(name),
+          },
+          statement.getText(source),
+        );
+        continue;
+      }
+
+      if (ts.isModuleDeclaration(statement)) {
+        const moduleName = qualifiedName(
+          prefix,
+          statement.name.getText(source).replace(/^["']|["']$/g, ""),
+        );
+        addAtom(
+          {
+            key: `module:${moduleName}`,
+            kind: "declaration",
+            label: quoted(moduleName),
+            parent: moduleName,
+            container: true,
+          },
+          `namespace ${moduleName}`,
+        );
+        let body = statement.body;
+        let bodyPrefix = moduleName;
+        while (body && ts.isModuleDeclaration(body)) {
+          const nestedName = qualifiedName(
+            bodyPrefix,
+            body.name.getText(source).replace(/^["']|["']$/g, ""),
+          );
+          addAtom(
+            {
+              key: `module:${nestedName}`,
+              kind: "declaration",
+              label: quoted(nestedName),
+              parent: nestedName,
+              container: true,
+            },
+            `namespace ${nestedName}`,
+          );
+          bodyPrefix = nestedName;
+          body = body.body;
+        }
+        if (body && ts.isModuleBlock(body)) {
+          visitStatements(body.statements, bodyPrefix);
+        } else if (body) {
+          unhandled.push(body.getText(source));
+        }
+        continue;
+      }
+
+      if (
+        ts.isImportDeclaration(statement) ||
+        ts.isImportEqualsDeclaration(statement) ||
+        ts.isExportDeclaration(statement) ||
+        ts.isExportAssignment(statement) ||
+        ts.isEmptyStatement(statement)
+      ) {
+        addAtom(
+          {
+            key: `statement:${statement.kind}:${statement.getText(source)}`,
+            kind: "declaration",
+            label: quoted(ts.SyntaxKind[statement.kind]),
+          },
+          statement.getText(source),
+        );
+        continue;
+      }
+
+      unhandled.push(statement.getText(source));
     }
   }
+
+  visitStatements(source.statements);
+  return { atoms, unhandled };
+}
+
+function arraysEqual<T>(left: readonly T[], right: readonly T[]) {
+  return (
+    left.length === right.length &&
+    left.every((value, index) => value === right[index])
+  );
+}
+
+export function generateChangelogChanges(
+  previous: string,
+  current: string,
+): ChangelogChange[] {
+  const previousModel = buildApiModel(previous);
+  const currentModel = buildApiModel(current);
+  const addedAtoms = [...currentModel.atoms.values()].filter(
+    ({ key }) => !previousModel.atoms.has(key),
+  );
+  const removedAtoms = [...previousModel.atoms.values()].filter(
+    ({ key }) => !currentModel.atoms.has(key),
+  );
+  const addedContainers = new Set(
+    addedAtoms.filter(({ container }) => container).map(({ parent }) => parent),
+  );
+  const removedContainers = new Set(
+    removedAtoms
+      .filter(({ container }) => container)
+      .map(({ parent }) => parent),
+  );
+  const addedInterfaces = new Set(
+    addedAtoms
+      .filter(({ kind }) => kind === "interface")
+      .map(({ parent }) => parent),
+  );
+  const removedInterfaces = new Set(
+    removedAtoms
+      .filter(({ kind }) => kind === "interface")
+      .map(({ parent }) => parent),
+  );
+  const changes: ChangelogChange[] = [];
+
+  function addExistenceChange(atom: ApiAtom, direction: "added" | "removed") {
+    if (atom.kind === "member") {
+      const containers =
+        direction === "added" ? addedContainers : removedContainers;
+      if (atom.parent && containers.has(atom.parent)) {
+        return;
+      }
+      changes.push({
+        key: atom.key,
+        kind: direction === "added" ? "member-added" : "member-removed",
+        label: atom.label,
+      });
+      return;
+    }
+    if (atom.kind === "interface") {
+      changes.push({
+        key: atom.key,
+        kind: direction === "added" ? "interface-added" : "interface-removed",
+        label: atom.label,
+      });
+      return;
+    }
+    const companionInterfaces =
+      direction === "added" ? addedInterfaces : removedInterfaces;
+    if (
+      atom.staticContainer &&
+      atom.parent &&
+      companionInterfaces.has(atom.parent)
+    ) {
+      return;
+    }
+    changes.push({
+      key: atom.key,
+      kind: direction === "added" ? "declaration-added" : "declaration-removed",
+      label: atom.label,
+    });
+  }
+
+  for (const atom of addedAtoms) {
+    addExistenceChange(atom, "added");
+  }
+  for (const atom of removedAtoms) {
+    addExistenceChange(atom, "removed");
+  }
+
+  for (const [key, previousAtom] of previousModel.atoms) {
+    const currentAtom = currentModel.atoms.get(key);
+    if (
+      currentAtom &&
+      !arraysEqual(previousAtom.signatures, currentAtom.signatures)
+    ) {
+      changes.push({
+        key,
+        kind: "signature-changed",
+        label: currentAtom.label,
+      });
+    }
+  }
+
+  if (
+    !arraysEqual(previousModel.unhandled, currentModel.unhandled) ||
+    (!changes.length && previous !== current)
+  ) {
+    changes.push({
+      key: "other",
+      kind: "other-changed",
+      label: "Declaration text changed.",
+    });
+  }
+
+  return changes;
+}
+
+const sectionTitles: Record<ChangelogChangeKind, string> = {
+  "interface-added": "New interfaces",
+  "interface-removed": "Removed interfaces",
+  "member-added": "Added members",
+  "member-removed": "Removed members",
+  "signature-changed": "Changed signatures",
+  "declaration-added": "Added declarations",
+  "declaration-removed": "Removed declarations",
+  "other-changed": "Other changes",
+};
+
+const sectionOrder = Object.keys(sectionTitles) as ChangelogChangeKind[];
+
+function versionGroupLabels(groups: Set<string | undefined>) {
+  const versionGroups = [...groups]
+    .filter((group): group is string => group !== undefined)
+    .sort((a, b) => Number(a.slice(2)) - Number(b.slice(2)));
 
   return {
-    interfaces: diff(
-      previousTypes.interfaceToMemberMap,
-      currentTypes.interfaceToMemberMap,
-    ),
-    others: diff(previousTypes.otherToMemberMap, currentTypes.otherToMemberMap),
-    statics: diff(previousTypes.staticMembers, currentTypes.staticMembers),
-    declarations: {
-      added: declarationNames.added,
-      removed: declarationNames.removed,
-      changed: changedDeclarations,
+    label(group: string | undefined) {
+      if (!group) {
+        const latestVersion = versionGroups[versionGroups.length - 1]?.slice(2);
+        return latestVersion
+          ? `TypeScript >${latestVersion}`
+          : "default TypeScript declarations";
+      }
+      const version = group.slice(2);
+      const index = versionGroups.indexOf(group);
+      const previousVersion = versionGroups[index - 1]?.slice(2);
+      return previousVersion
+        ? `TypeScript >${previousVersion} and <=${version}`
+        : `TypeScript <=${version}`;
     },
   };
 }
 
-function writeAddedRemoved(added: Set<string>, removed: Set<string>) {
-  function newlineSeparatedList(names: Set<string>) {
-    return [...names].map((a) => `* \`${a}\``).join("\n");
-  }
-  const output = [];
-  if (added.size) {
-    output.push(`## New interfaces\n\n${newlineSeparatedList(added)}`);
-  }
-  if (removed.size) {
-    output.push(`## Removed interfaces\n\n${newlineSeparatedList(removed)}`);
-  }
-  return output.join("\n\n");
-}
-
-function writeMemberChanges(added: Set<string>, removed: Set<string>) {
-  function commaSeparatedList(names: Set<string>) {
-    return [...names].map((a) => `\`${a}\``).join(", ");
-  }
-  const output = [];
-  if (added.size) {
-    output.push(`  * Added: ${commaSeparatedList(added)}`);
-  }
-  if (removed.size) {
-    output.push(`  * Removed: ${commaSeparatedList(removed)}`);
-  }
-  return output.join("\n");
-}
-
-function writeDeclarationChanges(added: Set<string>, removed: Set<string>) {
-  const output = [];
-  if (added.size) {
-    output.push(`* Added: ${[...added].map((a) => `\`${a}\``).join(", ")}`);
-  }
-  if (removed.size) {
-    output.push(`* Removed: ${[...removed].map((a) => `\`${a}\``).join(", ")}`);
-  }
-  return output.join("\n");
-}
-
-function writeChangedSignatures(
-  modifiedGroups: Map<
+export function formatChangelogEntries(entries: readonly ChangelogEntry[]) {
+  const allGroups = new Set(entries.map(({ group }) => group));
+  const labels = versionGroupLabels(allGroups);
+  const aggregated = new Map<
     string,
-    { added: Set<string>; removed: Set<string>; changed: Set<string> }
-  >[],
-  changedDeclarations: Set<string>,
-) {
-  function join(items: string[]) {
-    if (items.length < 2) {
-      return items[0];
+    { change: ChangelogChange; groups: Set<string | undefined> }
+  >();
+
+  for (const { group, changes } of entries) {
+    for (const change of changes) {
+      const identity = `${change.kind}:${change.key}`;
+      const existing = aggregated.get(identity);
+      if (existing) {
+        existing.groups.add(group);
+      } else {
+        aggregated.set(identity, { change, groups: new Set([group]) });
+      }
     }
-    if (items.length === 2) {
-      return `${items[0]} and ${items[1]}`;
-    }
-    return `${items.slice(0, -1).join(", ")}, and ${items[items.length - 1]}`;
   }
 
-  const output = [];
-  for (const modified of modifiedGroups) {
-    for (const [name, { changed }] of modified) {
-      if (!changed.size) {
-        continue;
-      }
-      const signatures = [...changed].map((member) => {
-        if (member === "constructor") {
-          return `\`${name}\` constructor`;
-        }
-        if (member === "call signature" || member === "index signature") {
-          return `\`${name}\` ${member}`;
-        }
-        return `\`${name}.${member}\``;
-      });
-      output.push(`* ${join(signatures)}`);
+  const sections = [];
+  for (const kind of sectionOrder) {
+    const sectionChanges = [...aggregated.values()].filter(
+      ({ change }) => change.kind === kind,
+    );
+    if (!sectionChanges.length) {
+      continue;
     }
+    const lines = sectionChanges.map(({ change, groups }) => {
+      const appliesToAll =
+        groups.size === allGroups.size &&
+        [...groups].every((group) => allGroups.has(group));
+      const scope = appliesToAll
+        ? ""
+        : ` _(${[...groups].map(labels.label).join(", ")} only)_`;
+      return `* ${change.label}${scope}`;
+    });
+    sections.push(`## ${sectionTitles[kind]}\n\n${lines.join("\n")}`);
   }
-  for (const name of changedDeclarations) {
-    output.push(`* \`${name}\``);
-  }
-  return output.join("\n");
+  return sections.join("\n\n");
+}
+
+export function generateChangelogFrom(
+  previous: string,
+  current: string,
+): string {
+  return formatChangelogEntries([
+    { changes: generateChangelogChanges(previous, current) },
+  ]);
 }
 
 const dom = "baselines/dom.generated.d.ts";
@@ -307,118 +531,6 @@ export function generateDefaultFromRecentTag(): string {
     throw new Error(`No change reported between ${base} and ${head}.`);
   }
   return changelog;
-}
-
-export function generateChangelogFrom(
-  previous: string,
-  current: string,
-): string {
-  const {
-    interfaces: { added, removed, modified },
-    others,
-    statics,
-    declarations,
-  } = diffTypes(previous, current);
-
-  const outputs = [];
-  if (added.size || removed.size) {
-    outputs.push(writeAddedRemoved(added, removed));
-  }
-
-  const memberGroups = [modified, others.modified, statics.modified];
-  if (
-    memberGroups.some((group) =>
-      [...group.values()].some(
-        ({ added, removed }) => added.size || removed.size,
-      ),
-    )
-  ) {
-    const modifiedOutput = [`## Modified\n`];
-    for (const group of memberGroups) {
-      for (const [key, value] of group) {
-        if (!value.added.size && !value.removed.size) {
-          continue;
-        }
-        modifiedOutput.push(`* ${key}`);
-        modifiedOutput.push(writeMemberChanges(value.added, value.removed));
-      }
-    }
-    outputs.push(modifiedOutput.join("\n"));
-  }
-
-  const changedSignatures = writeChangedSignatures(
-    memberGroups,
-    declarations.changed,
-  );
-  if (changedSignatures) {
-    outputs.push(`## Changed signatures\n\n${changedSignatures}`);
-  }
-
-  const otherAdded = new Set([...others.added, ...declarations.added]);
-  const otherRemoved = new Set([...others.removed, ...declarations.removed]);
-  if (otherAdded.size || otherRemoved.size) {
-    outputs.push(
-      `## Other declarations\n\n${writeDeclarationChanges(
-        otherAdded,
-        otherRemoved,
-      )}`,
-    );
-  }
-
-  if (!outputs.length && previous !== current) {
-    outputs.push("## Other changes\n\n* Declaration text changed.");
-  }
-
-  const output = outputs.join("\n\n");
-  return output;
-}
-
-export function formatChangelogEntries(
-  entries: readonly { group?: string; notes: string }[],
-): string {
-  const allGroups = new Set(entries.map(({ group }) => group));
-  const groupsByNotes = new Map<string, Set<string | undefined>>();
-  for (const { group, notes } of entries) {
-    const trimmedNotes = notes.trim();
-    if (!trimmedNotes) {
-      continue;
-    }
-    const groups = groupsByNotes.get(trimmedNotes) ?? new Set();
-    groups.add(group);
-    groupsByNotes.set(trimmedNotes, groups);
-  }
-
-  const versionGroups = [...allGroups]
-    .filter((group): group is string => group !== undefined)
-    .sort((a, b) => Number(a.slice(2)) - Number(b.slice(2)));
-
-  function groupLabel(group: string | undefined) {
-    if (!group) {
-      const latestVersion = versionGroups[versionGroups.length - 1]?.slice(2);
-      return latestVersion
-        ? `TypeScript >${latestVersion}`
-        : "default TypeScript declarations";
-    }
-    const version = group.slice(2);
-    const index = versionGroups.indexOf(group);
-    const previousVersion = versionGroups[index - 1]?.slice(2);
-    return previousVersion
-      ? `TypeScript >${previousVersion} and <=${version}`
-      : `TypeScript <=${version}`;
-  }
-
-  return [...groupsByNotes]
-    .map(([notes, groups]) => {
-      if (
-        groups.size === allGroups.size &&
-        [...groups].every((group) => allGroups.has(group))
-      ) {
-        return notes;
-      }
-      const labels = [...groups].map(groupLabel);
-      return `_${labels.join(", ")} only_\n\n${notes}`;
-    })
-    .join("\n\n");
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

@@ -4,11 +4,10 @@
 
 import {
   formatChangelogEntries,
-  generateChangelogFrom,
+  generateChangelogChanges,
   gitShowFile,
 } from "../src/changelog.ts";
 import { packages } from "./createTypesPackages.js";
-import { basename } from "path";
 
 const [name, before, to] = process.argv.slice(2);
 if (!name || !before || !to) {
@@ -25,16 +24,37 @@ const go = () => {
     throw new Error(`Could not find ${name} in ${packages.map((p) => p.name)}`);
   }
 
-  const changelogEntries = [];
+  const changelogGroups = new Map();
   for (const file of thisPackageMeta.files) {
-    const filename = `baselines/${basename(file.from)}`;
+    const generatedPrefix = "../generated/";
+    if (!file.from.startsWith(generatedPrefix)) {
+      throw new Error(`Expected generated file path, got ${file.from}`);
+    }
+    const filename = `baselines/${file.from.slice(generatedPrefix.length)}`;
     const beforeFileText = gitShowFile(`${name}@${before}`, filename);
     const toFileText = gitShowFile(`${name}@${to}`, filename);
 
-    const notes = generateChangelogFrom(beforeFileText, toFileText);
-    changelogEntries.push({ group: file.group, notes });
+    let changelogGroup = changelogGroups.get(file.group);
+    if (!changelogGroup) {
+      changelogGroups.set(
+        file.group,
+        (changelogGroup = { previous: [], current: [] }),
+      );
+    }
+    changelogGroup.previous.push(beforeFileText);
+    changelogGroup.current.push(toFileText);
   }
-  console.log(formatChangelogEntries(changelogEntries));
+  console.log(
+    formatChangelogEntries(
+      [...changelogGroups].map(([group, { previous, current }]) => ({
+        group,
+        changes: generateChangelogChanges(
+          previous.join("\n"),
+          current.join("\n"),
+        ),
+      })),
+    ),
+  );
 };
 
 go();

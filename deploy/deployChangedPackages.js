@@ -12,7 +12,7 @@ import { Octokit } from "@octokit/rest";
 import { printUnifiedDiff } from "print-diff";
 import {
   formatChangelogEntries,
-  generateChangelogFrom,
+  generateChangelogChanges,
 } from "../src/changelog.ts";
 import { packages } from "./createTypesPackages.js";
 import { fileURLToPath } from "node:url";
@@ -49,7 +49,16 @@ for (const dirName of fs.readdirSync(generatedDir)) {
     f.endsWith(".d.ts"),
   );
 
-  const changelogEntries = [];
+  const changelogGroups = new Map();
+  for (const file of thisPackageMeta.files) {
+    if (!changelogGroups.has(file.group)) {
+      changelogGroups.set(file.group, {
+        previous: [],
+        current: [],
+        complete: true,
+      });
+    }
+  }
 
   // Look through each .d.ts file included in a package to
   // determine if anything has changed
@@ -72,8 +81,9 @@ for (const dirName of fs.readdirSync(generatedDir)) {
         printUnifiedDiff(oldFile, generatedDTSContent);
       }
 
-      const notes = generateChangelogFrom(oldFile, generatedDTSContent);
-      changelogEntries.push({ group: filemap.group, notes });
+      const changelogGroup = changelogGroups.get(filemap.group);
+      changelogGroup.previous.push(oldFile);
+      changelogGroup.current.push(generatedDTSContent);
 
       upload = upload || oldFile !== generatedDTSContent;
     } catch (error) {
@@ -82,11 +92,19 @@ for (const dirName of fs.readdirSync(generatedDir)) {
 Could not get the file ${file} inside the npm package ${pkgJSON.name} from tag ${olderVersion}.
 Assuming that this means we need to upload this package.`);
       console.error(error);
+      changelogGroups.get(filemap.group).complete = false;
       upload = true;
     }
   }
 
-  const releaseNotes = formatChangelogEntries(changelogEntries);
+  const releaseNotes = formatChangelogEntries(
+    [...changelogGroups].map(([group, { previous, current, complete }]) => ({
+      group,
+      changes: complete
+        ? generateChangelogChanges(previous.join("\n"), current.join("\n"))
+        : [],
+    })),
+  );
 
   // Publish via npm
   if (upload) {
