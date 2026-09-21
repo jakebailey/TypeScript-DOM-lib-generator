@@ -4,24 +4,16 @@ import "./changelog.js";
 
 for (const filename of await readdir(new URL("files/", import.meta.url))) {
   if (filename.endsWith(".ts")) {
-    execSync(
-      `npx tsc generated/dom.generated.d.ts unittests/files/${filename} --target es2020 --lib es2020 --types --noEmit --ignoreConfig`,
-      {
-        stdio: "inherit",
-      },
-    );
+    execSync(`npx tsc generated/dom.generated.d.ts unittests/files/${filename} --target es2020 --lib es2020 --types --noEmit --ignoreConfig`, {
+      stdio: "inherit"
+    });
   }
 }
 
-for (const filename of await readdir(
-  new URL("files/audioworklet", import.meta.url),
-)) {
+for (const filename of await readdir(new URL("files/audioworklet", import.meta.url))) {
   if (filename.endsWith(".ts")) {
-    execSync(
-      `npx tsc generated/audioworklet.generated.d.ts unittests/files/audioworklet/${filename} --target es2020 --lib es2020 --types --noEmit --ignoreConfig`,
-      {
-        stdio: "inherit",
-      },
-    );
+    execSync(`npx tsc generated/audioworklet.generated.d.ts unittests/files/audioworklet/${filename} --target es2020 --lib es2020 --types --noEmit --ignoreConfig`, {
+      stdio: "inherit"
+    });
   }
 }
