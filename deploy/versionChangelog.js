@@ -2,7 +2,11 @@
 
 // npm run ts-changelog @types/web 0.0.1 0.0.3
 
-import { gitShowFile, generateChangelogFrom } from "../src/changelog.ts";
+import {
+  formatChangelogEntries,
+  generateChangelogFrom,
+  gitShowFile,
+} from "../src/changelog.ts";
 import { packages } from "./createTypesPackages.js";
 import { basename } from "path";
 
@@ -21,17 +25,16 @@ const go = () => {
     throw new Error(`Could not find ${name} in ${packages.map((p) => p.name)}`);
   }
 
+  const changelogEntries = [];
   for (const file of thisPackageMeta.files) {
     const filename = `baselines/${basename(file.from)}`;
     const beforeFileText = gitShowFile(`${name}@${before}`, filename);
     const toFileText = gitShowFile(`${name}@${to}`, filename);
 
     const notes = generateChangelogFrom(beforeFileText, toFileText);
-    if (notes.trim() !== "") {
-      console.log(`\n## \`${file.to}\`\n`);
-      console.log(notes);
-    }
+    changelogEntries.push({ group: file.group, notes });
   }
+  console.log(formatChangelogEntries(changelogEntries));
 };
 
 go();

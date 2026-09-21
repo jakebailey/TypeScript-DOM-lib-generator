@@ -10,7 +10,10 @@ import * as path from "path";
 import { spawnSync } from "child_process";
 import { Octokit } from "@octokit/rest";
 import { printUnifiedDiff } from "print-diff";
-import { generateChangelogFrom } from "../src/changelog.ts";
+import {
+  formatChangelogEntries,
+  generateChangelogFrom,
+} from "../src/changelog.ts";
 import { packages } from "./createTypesPackages.js";
 import { fileURLToPath } from "node:url";
 import pRetry from "p-retry";
@@ -46,7 +49,7 @@ for (const dirName of fs.readdirSync(generatedDir)) {
     f.endsWith(".d.ts"),
   );
 
-  const releaseNotes = [];
+  const changelogEntries = [];
 
   // Look through each .d.ts file included in a package to
   // determine if anything has changed
@@ -69,12 +72,8 @@ for (const dirName of fs.readdirSync(generatedDir)) {
         printUnifiedDiff(oldFile, generatedDTSContent);
       }
 
-      const title = `## \`${file}\``;
       const notes = generateChangelogFrom(oldFile, generatedDTSContent);
-      if (notes.trim() !== "") {
-        releaseNotes.push(title);
-        releaseNotes.push(notes);
-      }
+      changelogEntries.push({ group: filemap.group, notes });
 
       upload = upload || oldFile !== generatedDTSContent;
     } catch (error) {
@@ -86,6 +85,8 @@ Assuming that this means we need to upload this package.`);
       upload = true;
     }
   }
+
+  const releaseNotes = formatChangelogEntries(changelogEntries);
 
   // Publish via npm
   if (upload) {
@@ -102,10 +103,7 @@ Assuming that this means we need to upload this package.`);
       } else {
         console.log(publish.stdout?.toString());
 
-        await createRelease(
-          `${pkgJSON.name}@${pkgJSON.version}`,
-          releaseNotes.join("\n\n"),
-        );
+        await createRelease(`${pkgJSON.name}@${pkgJSON.version}`, releaseNotes);
       }
     } else {
       console.log(
@@ -117,7 +115,7 @@ Assuming that this means we need to upload this package.`);
     uploaded.push(dirName);
 
     console.log("\n# Release notes:\n");
-    console.log(releaseNotes.join("\n\n"), "\n\n");
+    console.log(releaseNotes, "\n\n");
   }
 }
 console.log("");
